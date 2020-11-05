@@ -105,8 +105,6 @@ int builtin_command(char **argv) {                                              
                 printf("[%d]   ", i+1);
             pid_t returnPid = waitpid(processos[i].pid, &status, WNOHANG);
             if (returnPid == 0)
-                printf("Running\t\t\t");
-            else if (returnPid == 1)
                 printf("Stopped\t\t\t");
             printf("%s\n", processos[i].path);
         }
