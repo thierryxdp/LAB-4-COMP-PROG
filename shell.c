@@ -23,16 +23,16 @@ int parseline(char *buf, char **argv);                                          
 int builtin_command(char **argv);                                                   /* Comandos definidos que a Shell executa */
 void unix_error(const char *msg);                                                   /* Mensagem de erro que será usada apenas para a função waitpid */
 int waitpid(pid_t pid, int *statusp, int options);                                  /* Função waitpid na qual o processo pai espera pelo término/parada do processo filho */
-Processo processos[10];
+char shell_name[MAXLINE] = "mabshell> ";
+Processo processos[100];
 int quantidadeProcessos = 0;
 
 void unix_error(const char *msg)    /* Função para o print de erros */
 {
     int errnum = errno;                                                             /* em errno temos o tipo de erro recebido. Então, criamos uma variável chamada errnum que armazenará esse valor */
     fprintf(stderr, "%s (%d: %s)\n", msg, errnum, strerror(errnum));                /* fprintf para o print da mensagem de erro, de acordo com o erro na variável errnum */
-    exit(EXIT_FAILURE);                                                             /* Como tivemos um erro, damos um exit com o valor da constante de erro chamada EXIT_FAILURE */
+    return;                                                                         /* Como tivemos um erro, damos um return encerrando o processo */
 }
-
 
 int main() {    /* Função main */
 
@@ -40,7 +40,7 @@ int main() {    /* Função main */
 
     while (1) {                                                                     /* Loop infinito enquanto o usuário estiver na Shell */
         
-        printf("mabshell> ");                                                       /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
+        printf("%s", shell_name);                                                   /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
         fgets(cmdline, MAXLINE, stdin);                                             /* Pegamos o input dado pelo usuário e colocamos na string cmdline definida anteriormente, e com o tamanho máximo de MAXLINE, sendo a entrada padrão definida no C */
         if (feof(stdin))                                                            /* Se for detectado o símbolo de EOF no input dado pelo usuário, terminamos o loop */
             exit(0);                                                                /* Dando exit(0) */
@@ -125,6 +125,45 @@ int builtin_command(char **argv) {                                              
         }
         else{
             puts("No processes running in background.");
+        }
+        return 1;
+    }
+    if (!strcmp(argv[0], "ls")) {
+        argv[0] = "/usr/bin/ls";
+        return 0;
+    }
+    if (!strcmp(argv[0], "cd")) {
+
+        if (!strcmp(argv[1], "..")){
+            if (!strcmp(shell_name, "mabshell> ")) {
+                return 1;
+            } else {
+                chdir(argv[1]);
+                int i;
+                for (i = strlen(shell_name) - 3; shell_name[i] != '/'; i--);
+                shell_name[i++] = '>';
+                shell_name[i++] = ' ';
+                shell_name[i] = '\0';
+                return 1;
+            }
+        }
+
+        if (!strcmp(argv[1], ".")) return 1;
+
+        int success;
+        success = chdir(argv[1]);
+        if (success < 0){
+            unix_error("Directory error: ");
+        } else {
+            char dir[MAXLINE] = "";
+            strcat(dir, "/");
+            strcat(dir, argv[1]);
+            strcat(dir, "> ");
+            char end[MAXLINE] = "";
+            strcat(end, shell_name);
+            end[strlen(end) - 2] = '\0';
+            strcat(end, dir);
+            strcpy(shell_name, end);
         }
         return 1;
     }
