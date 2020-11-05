@@ -5,12 +5,17 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 
 #define MAXARGS 128                                                                 /* Número máximo de argumentos que poderão ser passados */
 #define MAXLINE 500                                                                 /* tamanho máximo da linha que será passada como comando */
 
 extern char **environ;                                                              /* lista de ponteiros das variáveis de ambiente */
 
+typedef struct{
+    pid_t pid;
+    char path[100];
+} Processo;
 
 /* Protótipo das funções que serão futuramente utilizadas */
 void eval(char *cmdline);                                                           /* Analisa a linha de comando passada pelo usuário */
@@ -18,7 +23,8 @@ int parseline(char *buf, char **argv);                                          
 int builtin_command(char **argv);                                                   /* Comandos definidos que a Shell executa */
 void unix_error(const char *msg);                                                   /* Mensagem de erro que será usada apenas para a função waitpid */
 int waitpid(pid_t pid, int *statusp, int options);                                  /* Função waitpid na qual o processo pai espera pelo término/parada do processo filho */
-
+Processo processos[10];
+int quantidadeProcessos = 0;
 
 void unix_error(const char *msg)    /* Função para o print de erros */
 {
@@ -69,7 +75,15 @@ void eval(char *cmdline) {                                                      
             int status;                                                             /* definimos a variável de status para receber o estado do processo filho */
             if (waitpid(pid, &status, 0) < 0)                                       /* O processo pai espera então o processo filho terminar, já que temos o pid do filho e o inteiro de espera bloqueante passados como parâmetros de waitpid */
                 unix_error("waitfg: waitpid error");                                /* Caso waitpid seja menor que 0, houve um erro e então o sinalizamos */
-        } else printf("%d %s", pid, cmdline);                                       /* Se for em bg, printamos o pid do filho e a linha de comando passada */ 
+                                                                                    /* Se for em bg, printamos o pid do filho e a linha de comando passada */ 
+        } else {
+            printf("[%d] %d\n", quantidadeProcessos+1, pid); 
+            char *ret = strchr(cmdline, '&');
+            *ret-- = '\0';
+            strcpy(processos[quantidadeProcessos].path, cmdline);
+            processos[quantidadeProcessos++].pid = pid;
+            kill(pid, SIGSTOP);
+        }                 
     }
     return;                                                                         /* retorno 0 de eval para o término do processo visto que eval retorna void */
 }
@@ -80,6 +94,42 @@ int builtin_command(char **argv) {                                              
         exit(0);                                                                    /* Então, queremos sair do processo e damos exit(0) */
     if (!strcmp(argv[0], "&"))                                                      /* No caso em que o primeiro argumento passado for o caractere '&', não há o que executar em bg */
         return 1;                                                                   /* E então retornamos o valor 1, indicando o encerramento do processo ao dar return em eval */
+    if (!strcmp(argv[0], "jobs")){
+        int status;
+        for (int i=0;i<quantidadeProcessos;i++){
+            if (i == quantidadeProcessos-1)
+                printf("[%d]+  ", i+1);
+            else if (i == quantidadeProcessos-2)
+                printf("[%d]-  ", i+1);
+            else
+                printf("[%d]   ", i+1);
+            pid_t returnPid = waitpid(processos[i].pid, &status, WNOHANG);
+            if (returnPid == 0)
+                printf("Running\t\t\t");
+            else if (returnPid == 1)
+                printf("Stopped\t\t\t");
+            printf("%s\n", processos[i].path);
+        }
+        return 1;
+    }
+    if (!strcmp(argv[0], "cls") || !strcmp(argv[0], "clear")){
+        system("clear");
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "fg")){
+        if (quantidadeProcessos > 0){
+            quantidadeProcessos--;
+            puts(processos[quantidadeProcessos].path);
+            kill(processos[quantidadeProcessos].pid, SIGCONT);
+            int status;
+            waitpid(processos[quantidadeProcessos].pid, &status, 0);
+        }
+        else{
+            puts("No processes running in background.");
+        }
+        return 1;
+    }
     return 0;                                                                       /* Retornamos 0 por default caso o comando não exista na nossa função e então eval printará mensagem de erro */
 }
 
