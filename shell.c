@@ -23,9 +23,24 @@ int parseline(char *buf, char **argv);                                          
 int builtin_command(char **argv);                                                   /* Comandos definidos que a Shell executa */
 void unix_error(const char *msg);                                                   /* Mensagem de erro que será usada apenas para a função waitpid */
 int waitpid(pid_t pid, int *statusp, int options);                                  /* Função waitpid na qual o processo pai espera pelo término/parada do processo filho */
+void handler(int sig);
 char shell_name[MAXLINE] = "mabshell> ";
 Processo processos[100];
+pid_t processoAtivo;
+pid_t pai;
+int temProcessoAtivo = 0;
 int quantidadeProcessos = 0;
+
+void handler(int sig){
+    if (sig == SIGINT && temProcessoAtivo){
+        temProcessoAtivo = 0;
+        kill(processoAtivo, SIGKILL);
+        printf("\n");
+    }
+    if (sig == SIGTSTP && temProcessoAtivo){
+        // Implementar
+    }
+}
 
 void unix_error(const char *msg)    /* Função para o print de erros */
 {
@@ -37,14 +52,17 @@ void unix_error(const char *msg)    /* Função para o print de erros */
 int main() {    /* Função main */
 
     char cmdline[MAXLINE];                                                          /* String que armazenará o input do usuário na linha de comando da nossa Shell */
-
+    pai = getpid();
+    signal(SIGTSTP,handler);
+    signal(SIGINT,handler);
     while (1) {                                                                     /* Loop infinito enquanto o usuário estiver na Shell */
         
         printf("%s", shell_name);                                                   /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
         fgets(cmdline, MAXLINE, stdin);                                             /* Pegamos o input dado pelo usuário e colocamos na string cmdline definida anteriormente, e com o tamanho máximo de MAXLINE, sendo a entrada padrão definida no C */
-        if (feof(stdin))                                                            /* Se for detectado o símbolo de EOF no input dado pelo usuário, terminamos o loop */
+        if (feof(stdin)){                                                           /* Se for detectado o símbolo de EOF no input dado pelo usuário, terminamos o loop */
             exit(0);                                                                /* Dando exit(0) */
 
+        }
         eval(cmdline);                                                              /* Enquanto o usuário entrar com o input e não detectarmos E0F, avaliamos a string cmdline com a função eval */
     }
 }
@@ -72,6 +90,8 @@ void eval(char *cmdline) {                                                      
 
         
         if (!bg) {                                                                  /* Se !bg, ou seja, se o usuário quer o processo rodando em foregroud */
+            processoAtivo = pid;
+            temProcessoAtivo = 1;
             int status;                                                             /* definimos a variável de status para receber o estado do processo filho */
             if (waitpid(pid, &status, 0) < 0)                                       /* O processo pai espera então o processo filho terminar, já que temos o pid do filho e o inteiro de espera bloqueante passados como parâmetros de waitpid */
                 unix_error("waitfg: waitpid error");                                /* Caso waitpid seja menor que 0, houve um erro e então o sinalizamos */
@@ -104,6 +124,10 @@ int builtin_command(char **argv) {                                              
             else
                 printf("[%d]   ", i+1);
             pid_t returnPid = waitpid(processos[i].pid, &status, WNOHANG);
+            if (returnPid == -1){
+                printf("fudeu neguin\n");
+                // Tratar erro.
+            }
             if (returnPid == 0)
                 printf("Stopped\t\t\t");
             printf("%s\n", processos[i].path);
@@ -128,13 +152,13 @@ int builtin_command(char **argv) {                                              
         }
         return 1;
     }
-    if (!strcmp(argv[0], "ls")) {
-        argv[0] = "/usr/bin/ls";
-        return 0;
+    if (!strcmp(argv[0], "ls")){
+        system("ls");
+        return 1;
     }
     if (!strcmp(argv[0], "cd")) {
 
-        if (!strcmp(argv[1], "..")){
+        if (!strcmp(argv[1], "..") || !strcmp(argv[1], "../")){
             if (!strcmp(shell_name, "mabshell> ")) {
                 return 1;
             } else {
@@ -148,7 +172,7 @@ int builtin_command(char **argv) {                                              
             }
         }
 
-        if (!strcmp(argv[1], ".")) return 1;
+        if (!strcmp(argv[1], ".") || !strcmp(argv[1], "./")) return 1;
 
         int success;
         success = chdir(argv[1]);
