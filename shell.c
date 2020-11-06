@@ -6,6 +6,7 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <dirent.h>
 
 #define MAXARGS 128                                                                 /* Número máximo de argumentos que poderão ser passados */
 #define MAXLINE 500                                                                 /* tamanho máximo da linha que será passada como comando */
@@ -15,6 +16,9 @@
 #define KWHT  "\x1B[37m"
 #define KYEL  "\x1B[33m"
 #define KCYN  "\x1B[36m"
+#define BB    "\033[1;34m"
+#define BG    "\033[1;32m"
+#define RESET "\033[0m"
 
 char *dir;
 extern char **environ;                                                              /* lista de ponteiros das variáveis de ambiente */
@@ -36,33 +40,20 @@ char shell_name[MAXLINE] = "mabshell> ";
 Processo processos[100];
 Processo processoAtivo;
 pid_t pai;
-int temProcessoAtivo = 0;
 int quantidadeProcessos = 0;
-char *nomeArquivo;
 
 void handler(int sig){
-    if (sig == SIGINT && temProcessoAtivo){
-        temProcessoAtivo = 0;
+    if (sig == SIGINT && processoAtivo.pid != pai){
         kill(processoAtivo.pid, SIGKILL);
         printf("\n");
     }
-    if (sig == SIGTSTP && temProcessoAtivo){
+    if (sig == SIGTSTP && processoAtivo.pid != pai){
         // Ajeitar para generalizar
+        kill(processoAtivo.pid, SIGSTOP);
+        processos[quantidadeProcessos].pid = processoAtivo.pid;
+        strcpy(processos[quantidadeProcessos++].path, processoAtivo.path);
+        processoAtivo.pid = pai;
         printf("\n");
-        char *argv[MAXARGS];
-        int argc = 0;
-        argv[argc++] = nomeArquivo;
-        char str[12];
-        sprintf(str, "%d", processoAtivo.pid);
-        argv[argc++] = str;
-        argv[argc++] = processoAtivo.path;
-        for (int i=0;i<quantidadeProcessos;i++){
-            sprintf(str, "%d", processos[i].pid);
-            argv[argc++] = str;
-            argv[argc++] = processos[i].path;
-        }
-        kill(processoAtivo.pid, SIGTSTP);
-        execve(argv[0], argv, environ);
     }
 }
 
@@ -109,27 +100,15 @@ void unix_error(const char *msg)    /* Função para o print de erros */
 
 int main(int argc, char *argv[]) {    /* Função main */
 
-    if (argc > 1){
-        for (int i=1;i<argc;i++){
-            if (i%2)
-                processos[quantidadeProcessos].pid = atoi(argv[i]);
-            else
-                strcpy(processos[quantidadeProcessos++].path, argv[i]);
-        }
-    }
-    else{
-        // Incluir o diretório;
-        nomeArquivo = argv[0];
-    }
-
     char cmdline[MAXLINE];                                                          /* String que armazenará o input do usuário na linha de comando da nossa Shell */
     pai = getpid();
     setpgid(pai, pai);
+    tcsetpgrp (STDIN_FILENO, pai);
     signal(SIGTSTP,handler);
     signal(SIGINT,handler);
     while (1) {                                                                     /* Loop infinito enquanto o usuário estiver na Shell */
         
-
+        
         printShellName();                                                   /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
         fgets(cmdline, MAXLINE, stdin);                                             /* Pegamos o input dado pelo usuário e colocamos na string cmdline definida anteriormente, e com o tamanho máximo de MAXLINE, sendo a entrada padrão definida no C */
         if (feof(stdin)){                                                           /* Se for detectado o símbolo de EOF no input dado pelo usuário, terminamos o loop */
@@ -150,26 +129,26 @@ void eval(char *cmdline) {                                                      
 
     strcpy(buf, cmdline);                                                           /* buf recebe o input na linha de comando passado pelo usuário, para alterarmos o input sem o perder */
     bg = parseline(buf, argv);                                                      /* Como Parseline analisa o input e constrói a lista de argumentos, ela retorna se o processo será em bg ou fg visto que essa decisão é feita no próprio input pelo usuário */
+    
     if (argv[0] == NULL)                                                            /* Caso o usuário não tenha passado argumentos, não há linha de comando para ser analisada */
         return;                                                                     /* E então podemos dar retorno 0, encerrando a função */
 
     if (!builtin_command(argv)) {                                                   /* Verifica se é um comando existente, se não for o if é satisfeito. Pois, ou o comando não existe, ou é um objeto executável */
         if ((pid = fork()) == 0) {                                                  /* Criamos então um processo filho, e o if é satisfeito somente no processo filho */
+            setpgid(0, 0);
             if (execve(argv[0], argv, environ) < 0) {                               /* Nesse caso, tentamos executar o primeiro argumento passado esperando que seja um objeto executável. Caso não seja, recebemos um erro e então o if é satisfeito */
                 printf("%s: Command not found.\n", argv[0]);                        /* Não é um comando conhecido e não é um objeto executável, então não o comando não foi achado */
                 exit(0);                                                            /* Encerramos o processo */
             }
          }
 
-        setpgid(pid, pid);
         if (!bg) {                                                                  /* Se !bg, ou seja, se o usuário quer o processo rodando em foregroud */
             processoAtivo.pid = pid;
             char *ret = strchr(cmdline, '\n');
             *ret = '\0';
             strcpy(processoAtivo.path, cmdline);
-            temProcessoAtivo = 1;
             int status;                                                             /* definimos a variável de status para receber o estado do processo filho */
-            if (waitpid(pid, &status, 0) < 0)                                       /* O processo pai espera então o processo filho terminar, já que temos o pid do filho e o inteiro de espera bloqueante passados como parâmetros de waitpid */
+            if (waitpid(pid, &status, WUNTRACED) < 0)                              /* O processo pai espera então o processo filho terminar, já que temos o pid do filho e o inteiro de espera bloqueante passados como parâmetros de waitpid */
                 unix_error("waitfg: waitpid error");                                /* Caso waitpid seja menor que 0, houve um erro e então o sinalizamos */
                                                                                     /* Se for em bg, printamos o pid do filho e a linha de comando passada */ 
         } else {
@@ -178,7 +157,6 @@ void eval(char *cmdline) {                                                      
             *ret-- = '\0';
             strcpy(processos[quantidadeProcessos].path, cmdline);
             processos[quantidadeProcessos++].pid = pid;
-            
         }                 
     }
     return;                                                                         /* retorno 0 de eval para o término do processo visto que eval retorna void */
@@ -221,19 +199,15 @@ int builtin_command(char **argv) {                                              
         }
         return 1;
     }
-    if (!strcmp(argv[0], "cls") || !strcmp(argv[0], "clear")){
-        system("clear");
-        return 1;
-    }
 
     if (!strcmp(argv[0], "cd")) {
         int success;
         success = chdir(argv[1]);
         if (success < 0){
             unix_error("Directory error: ");
-        } else {
-            return 1;
         }
+        return 1;
+        
     }
 
     if (!strcmp(argv[0], "fg")){
@@ -241,7 +215,7 @@ int builtin_command(char **argv) {                                              
             int status;
             quantidadeProcessos--;
             puts(processos[quantidadeProcessos].path);
-            kill(processos[quantidadeProcessos].pid, SIGCONT);
+            //kill(processos[quantidadeProcessos].pid, SIGCONT);
             waitpid(processos[quantidadeProcessos].pid, &status, 0);
         }
         else{
@@ -250,44 +224,29 @@ int builtin_command(char **argv) {                                              
         return 1;
     }
     if (!strcmp(argv[0], "ls")){
-        system("ls");
-        return 1;
-    }
-    if (!strcmp(argv[0], "cd")) {
-
-        if (!strcmp(argv[1], "..") || !strcmp(argv[1], "../")){
-            if (!strcmp(shell_name, "mabshell> ")) {
-                return 1;
-            } else {
-                chdir(argv[1]);
-                int i;
-                for (i = strlen(shell_name) - 3; shell_name[i] != '/'; i--);
-                shell_name[i++] = '>';
-                shell_name[i++] = ' ';
-                shell_name[i] = '\0';
-                return 1;
+        // Falta ordenar os nomes
+        DIR *d;
+        struct dirent *dir;
+        d = opendir(".");
+        if (d){
+            while ((dir = readdir(d)) != NULL){
+                if (dir->d_type == 4){
+                    printf(BB);
+                }
+                else{
+                    if (strchr(dir->d_name, '.') == NULL)
+                        printf(BG);
+                }
+                if(dir->d_name[0] != '.')
+                    printf("%s  ", dir->d_name);
+                printf(RESET);
             }
-        }
-
-        if (!strcmp(argv[1], ".") || !strcmp(argv[1], "./")) return 1;
-
-        int success;
-        success = chdir(argv[1]);
-        if (success < 0){
-            unix_error("Directory error: ");
-        } else {
-            char dir[MAXLINE] = "";
-            strcat(dir, "/");
-            strcat(dir, argv[1]);
-            strcat(dir, "> ");
-            char end[MAXLINE] = "";
-            strcat(end, shell_name);
-            end[strlen(end) - 2] = '\0';
-            strcat(end, dir);
-            strcpy(shell_name, end);
+            printf("\n");
+            closedir(d);
         }
         return 1;
     }
+
     return 0;                                                                       /* Retornamos 0 por default caso o comando não exista na nossa função e então eval printará mensagem de erro */
 }
 
