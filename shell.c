@@ -26,19 +26,29 @@ int waitpid(pid_t pid, int *statusp, int options);                              
 void handler(int sig);
 char shell_name[MAXLINE] = "mabshell> ";
 Processo processos[100];
-pid_t processoAtivo;
+Processo processoAtivo;
 pid_t pai;
 int temProcessoAtivo = 0;
 int quantidadeProcessos = 0;
+char *nomeArquivo;
 
 void handler(int sig){
     if (sig == SIGINT && temProcessoAtivo){
         temProcessoAtivo = 0;
-        kill(processoAtivo, SIGKILL);
+        kill(processoAtivo.pid, SIGKILL);
         printf("\n");
     }
     if (sig == SIGTSTP && temProcessoAtivo){
-        // Implementar
+        // Ajeitar para generalizar
+        printf("\n");
+        char *argv[MAXARGS];
+        argv[0] = nomeArquivo;
+        char str[12];
+        sprintf(str, "%d", processoAtivo.pid);
+        argv[1] = str;
+        argv[2] = processoAtivo.path;
+        kill(processoAtivo.pid, SIGTSTP);
+        execve(argv[0], argv, environ);
     }
 }
 
@@ -49,14 +59,29 @@ void unix_error(const char *msg)    /* Função para o print de erros */
     return;                                                                         /* Como tivemos um erro, damos um return encerrando o processo */
 }
 
-int main() {    /* Função main */
+int main(int argc, char *argv[]) {    /* Função main */
+
+    if (argc > 1){
+        for (int i=1;i<argc;i++){
+            if (i%2)
+                processos[quantidadeProcessos].pid = atoi(argv[i]);
+            else
+                strcpy(processos[quantidadeProcessos++].path, argv[i]);
+        }
+    }
+    else{
+        // Incluir o diretório;
+        nomeArquivo = argv[0];
+    }
 
     char cmdline[MAXLINE];                                                          /* String que armazenará o input do usuário na linha de comando da nossa Shell */
     pai = getpid();
+    setpgid(pai, pai);
     signal(SIGTSTP,handler);
     signal(SIGINT,handler);
     while (1) {                                                                     /* Loop infinito enquanto o usuário estiver na Shell */
         
+
         printf("%s", shell_name);                                                   /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
         fgets(cmdline, MAXLINE, stdin);                                             /* Pegamos o input dado pelo usuário e colocamos na string cmdline definida anteriormente, e com o tamanho máximo de MAXLINE, sendo a entrada padrão definida no C */
         if (feof(stdin)){                                                           /* Se for detectado o símbolo de EOF no input dado pelo usuário, terminamos o loop */
@@ -88,9 +113,12 @@ void eval(char *cmdline) {                                                      
             }
          }
 
-        
+        setpgid(pid, pid);
         if (!bg) {                                                                  /* Se !bg, ou seja, se o usuário quer o processo rodando em foregroud */
-            processoAtivo = pid;
+            processoAtivo.pid = pid;
+            char *ret = strchr(cmdline, '\n');
+            *ret = '\0';
+            strcpy(processoAtivo.path, cmdline);
             temProcessoAtivo = 1;
             int status;                                                             /* definimos a variável de status para receber o estado do processo filho */
             if (waitpid(pid, &status, 0) < 0)                                       /* O processo pai espera então o processo filho terminar, já que temos o pid do filho e o inteiro de espera bloqueante passados como parâmetros de waitpid */
@@ -102,7 +130,7 @@ void eval(char *cmdline) {                                                      
             *ret-- = '\0';
             strcpy(processos[quantidadeProcessos].path, cmdline);
             processos[quantidadeProcessos++].pid = pid;
-            kill(pid, SIGSTOP);
+            
         }                 
     }
     return;                                                                         /* retorno 0 de eval para o término do processo visto que eval retorna void */
@@ -115,6 +143,17 @@ int builtin_command(char **argv) {                                              
     if (!strcmp(argv[0], "&"))                                                      /* No caso em que o primeiro argumento passado for o caractere '&', não há o que executar em bg */
         return 1;                                                                   /* E então retornamos o valor 1, indicando o encerramento do processo ao dar return em eval */
     if (!strcmp(argv[0], "jobs")){
+        for (int i=0;i<quantidadeProcessos;i++){
+            int status;
+            pid_t returnPid = waitpid(processos[i].pid, &status, WNOHANG);
+            if (returnPid == -1){
+                for (int j=i;j<quantidadeProcessos;j++){
+                    processos[j].pid = processos[j+1].pid;
+                    strcpy(processos[j].path, processos[j+1].path);
+                }
+                quantidadeProcessos--;
+            }
+        }
         int status;
         for (int i=0;i<quantidadeProcessos;i++){
             if (i == quantidadeProcessos-1)
@@ -124,11 +163,11 @@ int builtin_command(char **argv) {                                              
             else
                 printf("[%d]   ", i+1);
             pid_t returnPid = waitpid(processos[i].pid, &status, WNOHANG);
-            if (returnPid == -1){
-                printf("fudeu neguin\n");
-                // Tratar erro.
-            }
+            if (returnPid == -1)
+                printf("Done\t\t\t");
             if (returnPid == 0)
+                printf("Running\t\t\t");
+            if (returnPid == 1)
                 printf("Stopped\t\t\t");
             printf("%s\n", processos[i].path);
         }
@@ -141,10 +180,10 @@ int builtin_command(char **argv) {                                              
 
     if (!strcmp(argv[0], "fg")){
         if (quantidadeProcessos > 0){
+            int status;
             quantidadeProcessos--;
             puts(processos[quantidadeProcessos].path);
             kill(processos[quantidadeProcessos].pid, SIGCONT);
-            int status;
             waitpid(processos[quantidadeProcessos].pid, &status, 0);
         }
         else{
