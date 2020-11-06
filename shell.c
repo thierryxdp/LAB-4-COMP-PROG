@@ -10,6 +10,13 @@
 #define MAXARGS 128                                                                 /* Número máximo de argumentos que poderão ser passados */
 #define MAXLINE 500                                                                 /* tamanho máximo da linha que será passada como comando */
 
+#define KGRN  "\x1B[32m"
+#define KBLU  "\x1B[34m"
+#define KWHT  "\x1B[37m"
+#define KYEL  "\x1B[33m"
+#define KCYN  "\x1B[36m"
+
+char *dir;
 extern char **environ;                                                              /* lista de ponteiros das variáveis de ambiente */
 
 typedef struct{
@@ -24,6 +31,7 @@ int builtin_command(char **argv);                                               
 void unix_error(const char *msg);                                                   /* Mensagem de erro que será usada apenas para a função waitpid */
 int waitpid(pid_t pid, int *statusp, int options);                                  /* Função waitpid na qual o processo pai espera pelo término/parada do processo filho */
 void handler(int sig);
+void printShellName(void);
 char shell_name[MAXLINE] = "mabshell> ";
 Processo processos[100];
 Processo processoAtivo;
@@ -42,15 +50,55 @@ void handler(int sig){
         // Ajeitar para generalizar
         printf("\n");
         char *argv[MAXARGS];
-        argv[0] = nomeArquivo;
+        int argc = 0;
+        argv[argc++] = nomeArquivo;
         char str[12];
         sprintf(str, "%d", processoAtivo.pid);
-        argv[1] = str;
-        argv[2] = processoAtivo.path;
+        argv[argc++] = str;
+        argv[argc++] = processoAtivo.path;
+        for (int i=0;i<quantidadeProcessos;i++){
+            sprintf(str, "%d", processos[i].pid);
+            argv[argc++] = str;
+            argv[argc++] = processos[i].path;
+        }
         kill(processoAtivo.pid, SIGTSTP);
         execve(argv[0], argv, environ);
     }
 }
+
+void printShellName (void){
+    char buf[MAXLINE];
+    char *shell_name = "mabshell";
+    
+    dir = getcwd(buf, sizeof(buf));
+
+    char check[MAXLINE] = "/home/";
+    int i, equals = 0;
+
+    for (i = 0; check[i] != '\0'; i++){
+        if (*(dir + i) == check[i]){
+            equals = 1;
+        } else {
+            equals = 0;
+            break;
+        }
+    }
+    if (equals){
+        int slashes = 0;
+        while (slashes < 2){
+            if (*dir == '/') slashes ++;
+            dir++;
+        }
+        while (*dir != '/' && *dir != '\0') dir++;
+        if (*dir == '/') *dir = '~';
+        else{
+            dir--;
+            *dir = '~';
+        }
+    }
+    printf("%s%s%s:%s%s%s> ", KYEL, shell_name, KWHT, KCYN, dir, KWHT);
+}
+
 
 void unix_error(const char *msg)    /* Função para o print de erros */
 {
@@ -82,7 +130,7 @@ int main(int argc, char *argv[]) {    /* Função main */
     while (1) {                                                                     /* Loop infinito enquanto o usuário estiver na Shell */
         
 
-        printf("%s", shell_name);                                                   /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
+        printShellName();                                                   /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
         fgets(cmdline, MAXLINE, stdin);                                             /* Pegamos o input dado pelo usuário e colocamos na string cmdline definida anteriormente, e com o tamanho máximo de MAXLINE, sendo a entrada padrão definida no C */
         if (feof(stdin)){                                                           /* Se for detectado o símbolo de EOF no input dado pelo usuário, terminamos o loop */
             exit(0);                                                                /* Dando exit(0) */
@@ -176,6 +224,16 @@ int builtin_command(char **argv) {                                              
     if (!strcmp(argv[0], "cls") || !strcmp(argv[0], "clear")){
         system("clear");
         return 1;
+    }
+
+    if (!strcmp(argv[0], "cd")) {
+        int success;
+        success = chdir(argv[1]);
+        if (success < 0){
+            unix_error("Directory error: ");
+        } else {
+            return 1;
+        }
     }
 
     if (!strcmp(argv[0], "fg")){
