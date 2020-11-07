@@ -7,9 +7,14 @@
 #include <errno.h>
 #include <signal.h>
 #include <dirent.h>
+#include <sys/wait.h>
 
 #define MAXARGS 128                                                                 /* Número máximo de argumentos que poderão ser passados */
 #define MAXLINE 500                                                                 /* tamanho máximo da linha que será passada como comando */
+
+#define RUNNING 15 //new
+#define STOPPED 16 //new
+#define DONE 17 // new
 
 #define KGRN  "\x1B[32m"
 #define KBLU  "\x1B[34m"
@@ -26,7 +31,13 @@ extern char **environ;                                                          
 typedef struct{
     pid_t pid;
     char path[100];
+    int situation; //new
 } Processo;
+
+Processo processo_fg;
+Processo processos_bg[200];
+Processo processo_shell;
+int quantidade_processos = 0;
 
 /* Protótipo das funções que serão futuramente utilizadas */
 void eval(char *cmdline);                                                           /* Analisa a linha de comando passada pelo usuário */
@@ -89,9 +100,15 @@ void unix_error(const char *msg)    /* Função para o print de erros */
 
 int main(int argc, char *argv[]) {    /* Função main */
 
+    processo_shell.pid = getpid();
+    strcpy(processo_shell.path, argv[0]);
+
+    signal(SIGCHLD, handler);
+    signal(SIGTSTP, handler);
+    signal(SIGINT, handler);
+
     char cmdline[MAXLINE];                                                          /* String que armazenará o input do usuário na linha de comando da nossa Shell */
     while (1) {                                                                     /* Loop infinito enquanto o usuário estiver na Shell */
-    
         printShellName();                                                           /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
         fgets(cmdline, MAXLINE, stdin);                                             /* Pegamos o input dado pelo usuário e colocamos na string cmdline definida anteriormente, e com o tamanho máximo de MAXLINE, sendo a entrada padrão definida no C */
         if (feof(stdin)){                                                           /* Se for detectado o símbolo de EOF no input dado pelo usuário, terminamos o loop */
@@ -118,18 +135,27 @@ void eval(char *cmdline) {                                                      
 
     if (!builtin_command(argv)) {                                                   /* Verifica se é um comando existente, se não for o if é satisfeito. Pois, ou o comando não existe, ou é um objeto executável */
         if ((pid = fork()) == 0) {                                                  /* Criamos então um processo filho, e o if é satisfeito somente no processo filho */
+            signal(SIGTSTP, SIG_DFL);
+            signal(SIGCHLD, SIG_DFL);
+            signal(SIGINT, SIG_DFL);
             if (execve(argv[0], argv, environ) < 0) {                               /* Nesse caso, tentamos executar o primeiro argumento passado esperando que seja um objeto executável. Caso não seja, recebemos um erro e então o if é satisfeito */
                 printf("%s: Command not found.\n", argv[0]);                        /* Não é um comando conhecido e não é um objeto executável, então não o comando não foi achado */
                 exit(0);                                                            /* Encerramos o processo */
             }
-         }
+        }
 
         if (!bg) {                                                                  /* Se !bg, ou seja, se o usuário quer o processo rodando em foregroud */
             int status;                                                             /* definimos a variável de status para receber o estado do processo filho */
+            processo_fg.pid = pid;
+            strcpy(processo_fg.path, cmdline);
             if (waitpid(pid, &status, WUNTRACED) < 0)                               /* O processo pai espera então o processo filho terminar, já que temos o pid do filho e o inteiro de espera bloqueante passados como parâmetros de waitpid */
                 unix_error("waitfg: waitpid error");                                /* Caso waitpid seja menor que 0, houve um erro e então o sinalizamos */                                                                 
         } else {
-            printf("%d %s", pid, cmdline);                                          /* Se for em bg, printamos o pid do filho e a linha de comando passada */
+            quantidade_processos++;
+            processos_bg[quantidade_processos].pid = pid;
+            strcpy(processos_bg[quantidade_processos].path, cmdline);
+            processos_bg[quantidade_processos].situation = RUNNING; //new
+            //printf("%d %s", pid, cmdline);                                          /* Se for em bg, printamos o pid do filho e a linha de comando passada */
         }                 
     }
     return;                                                                         /* retorno 0 de eval para o término do processo visto que eval retorna void */
@@ -142,9 +168,50 @@ int builtin_command(char **argv) {                                              
     if (!strcmp(argv[0], "&"))                                                      /* No caso em que o primeiro argumento passado for o caractere '&', não há o que executar em bg */
         return 1;                                                                   /* E então retornamos o valor 1, indicando o encerramento do processo ao dar return em eval */
     if (!strcmp(argv[0], "jobs")){
-    
+        /* Falta retirar o símbolo & do path, e excluir os processos que estiverem done */
+        for (int i = 1; i <= quantidade_processos; i++){
+            printf("[%d]", i);
+            if (i == quantidade_processos) printf("+  ");
+            if (i == quantidade_processos - 1) printf("-  ");
+            if (i < quantidade_processos - 1) printf("   ");
+            pid_t pid;
+            int status;
+            pid = waitpid(processos_bg[i].pid, &status, WUNTRACED | WNOHANG); //new
+        
+            if (pid >= 0){ //new
+                if (WIFEXITED(status)) { //new
+                    processos_bg[i].situation = DONE; //new
+                } else if (WIFSTOPPED(status)){ //new
+                    processos_bg[i].situation = STOPPED; //new
+                } //new
+            }  //new
+            if (processos_bg[i].situation == RUNNING) printf("Running"); //new
+            if (processos_bg[i].situation == STOPPED) printf("Stopped"); //new    
+            if (processos_bg[i].situation == DONE) printf("Done"); //new
+            printf("\t\t\t%s", processos_bg[i].path); //new
+            
+         
+        }
+        /* -> Tentativa falha de implementar reap dos processos com done (zombies). Mais fácil fazer uma lista encadeada, e muito mais prático, porém fui de berço, pode deixar que eu implemento amanhã, vai resolvendo as outras coisas
+        for (int i = quantidade_processos; i >= 1; i--){
+            if (processos_bg[i].situation == DONE){
+                if (i == quantidade_processos){
+                    Processo temp;
+                    quantidade_processos--;
+                } else {
+                    printf("alo\n");
+                    for (int j = i; j <= quantidade_processos - 1; j++){
+                        processos_bg[j] = processos_bg[j+1];
+                    }
+                    quantidade_processos--;
+                }
+            }   
+        }
+        */
+        return 1;
     }
-
+        
+    
     if (!strcmp(argv[0], "cd")) {
         int success;
         success = chdir(argv[1]);
@@ -152,7 +219,6 @@ int builtin_command(char **argv) {                                              
             unix_error("Directory error: ");
         }
         return 1;
-        
     }
 
     if (!strcmp(argv[0], "fg")){
