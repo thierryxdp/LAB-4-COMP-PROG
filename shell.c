@@ -58,7 +58,7 @@ void bg_func(int id_process);
 char shell_name[MAXLINE] = "mabshell> ";
 
 void handler(int sig){
-    if (sig == SIGCHLD){ // luan
+    if (sig == SIGCHLD){
         pid_t pid;
         int status;
         pid = waitpid(processo_fg.pid, &status, WNOHANG);
@@ -67,8 +67,8 @@ void handler(int sig){
             printf("\n[%d]+  Stopped\t\t\t%s", quantidade_processos, processo_fg.path);
             processos_bg[quantidade_processos].pid = processo_fg.pid;
             strcpy(processos_bg[quantidade_processos].path, processo_fg.path);
-            processos_bg[quantidade_processos].situation = STOPPED; //new
-            processos_bg[quantidade_processos].verificado = 1; // luan
+            processos_bg[quantidade_processos].situation = STOPPED;
+            processos_bg[quantidade_processos].verificado = 1;
         }
         else{
             if (processo_fg.pid != processo_shell.pid){
@@ -115,9 +115,9 @@ void printShellName (void){
 }
 
 void bg_func(int id_process){
-    kill(processos_bg[id_process].pid, SIGCONT);
-    processos_bg[id_process].situation = DONE;
+    processos_bg[id_process].situation = RUNNING;
     processos_bg[id_process].verificado = 0;
+    kill(processos_bg[id_process].pid, SIGCONT);
 
     if(id_process == quantidade_processos){
         printf("[%d]+  %s", id_process, processos_bg[id_process].path);
@@ -139,7 +139,7 @@ int main(int argc, char *argv[]) {    /* Função main */
 
     processo_shell.pid = getpid();
     strcpy(processo_shell.path, argv[0]);
-    processo_fg = processo_shell; // luan
+    processo_fg = processo_shell;
 
     signal(SIGCHLD, handler);
     signal(SIGTSTP, SIG_IGN);
@@ -196,22 +196,22 @@ void eval(char *cmdline) {                                                      
         }
         setpgid(0, 0); // luan
         if (!bg) {                                                                  /* Se !bg, ou seja, se o usuário quer o processo rodando em foregroud */
-            tcsetpgrp(STDIN_FILENO, pid); // luan
+            tcsetpgrp(STDIN_FILENO, pid);
             int status;                                                             /* definimos a variável de status para receber o estado do processo filho */
             processo_fg.pid = pid;
             strcpy(processo_fg.path, cmdline);
             if (waitpid(pid, &status, WUNTRACED) < 0)                               /* O processo pai espera então o processo filho terminar, já que temos o pid do filho e o inteiro de espera bloqueante passados como parâmetros de waitpid */
                 unix_error("waitfg: waitpid error");                                /* Caso waitpid seja menor que 0, houve um erro e então o sinalizamos */                                                                 
-            tcsetpgrp(STDIN_FILENO, processo_shell.pid); // luan
-            processo_fg = processo_shell; // luan
+            tcsetpgrp(STDIN_FILENO, processo_shell.pid);
+            processo_fg = processo_shell;
         } else {
             
             quantidade_processos++;
             processos_bg[quantidade_processos].pid = pid;
             strcpy(processos_bg[quantidade_processos].path, cmdline);
-            processos_bg[quantidade_processos].situation = RUNNING; //new
-            processos_bg[quantidade_processos].verificado = 0; // luan
-            printf("[%d] %d\n", quantidade_processos, pid);  //luan                  /* Se for em bg, printamos o pid do filho e a linha de comando passada */
+            processos_bg[quantidade_processos].situation = RUNNING;
+            processos_bg[quantidade_processos].verificado = 0;
+            printf("[%d] %d\n", quantidade_processos, pid);                 /* Se for em bg, printamos o pid do filho e a linha de comando passada */
         }                 
     }
     return;                                                                         /* retorno 0 de eval para o término do processo visto que eval retorna void */
