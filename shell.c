@@ -34,14 +34,15 @@ extern char **environ;                                                          
 typedef struct{
     pid_t pid;
     char path[100];
-    int situation; //new
-    int verificado; // luan
+    int situation; 
+    int verificado; 
 } Processo;
 
 Processo processo_fg;
 Processo processos_bg[200];
 Processo processo_shell;
 int quantidade_processos = 0;
+sigset_t mask;
 
 /* Protótipo das funções que serão futuramente utilizadas */
 void eval(char *cmdline);                                                           /* Analisa a linha de comando passada pelo usuário */
@@ -51,7 +52,8 @@ void unix_error(const char *msg);                                               
 int waitpid(pid_t pid, int *statusp, int options);                                  /* Função waitpid na qual o processo pai espera pelo término/parada do processo filho */
 void handler(int sig);
 void printShellName(void);
-
+void fg_func(int id_process);
+void bg_func(int id_process);
 
 char shell_name[MAXLINE] = "mabshell> ";
 
@@ -69,7 +71,10 @@ void handler(int sig){
             processos_bg[quantidade_processos].verificado = 1; // luan
         }
         else{
-            processo_fg = processo_shell;
+            if (processo_fg.pid != processo_shell.pid){
+                printf("\n");
+                processo_fg = processo_shell;
+            }
         }   
     }
 }
@@ -109,6 +114,36 @@ void printShellName (void){
     printf("%s%s%s:%s%s%s> ", KYEL, shell_name, KWHT, KCYN, dir, KWHT);
 }
 
+void fg_func(int id_process){
+    tcsetpgrp(STDIN_FILENO, processos_bg[id_process].pid);
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &mask, NULL);
+    processo_fg = processos_bg[id_process];
+    processos_bg[id_process].situation = DONE;
+    processos_bg[id_process].verificado = 0;
+    kill(processo_fg.pid, SIGCONT);
+    int status;
+    printf("%s", processo_fg.path);
+    waitpid(processo_fg.pid, &status, WUNTRACED);
+    tcsetpgrp(STDIN_FILENO, processo_shell.pid);
+    processo_fg = processo_shell;
+    sigprocmask(SIG_UNBLOCK, &mask, NULL); 
+}
+
+void bg_func(int id_process){
+    kill(processos_bg[id_process].pid, SIGCONT);
+    processos_bg[id_process].situation = DONE;
+    processos_bg[id_process].verificado = 0;
+
+    if(id_process == quantidade_processos){
+        printf("[%d]+  %s", id_process, processos_bg[id_process].path);
+    } else if (id_process == quantidade_processos - 1){
+        printf("[%d]-  %s", id_process, processos_bg[id_process].path);
+    } else {
+        printf("[%d]   %s", id_process, processos_bg[id_process].path);
+    }
+}
 
 void unix_error(const char *msg)    /* Função para o print de erros */
 {
@@ -131,6 +166,7 @@ int main(int argc, char *argv[]) {    /* Função main */
 
     char cmdline[MAXLINE];                                                          /* String que armazenará o input do usuário na linha de comando da nossa Shell */
     while (1) {                                                                     /* Loop infinito enquanto o usuário estiver na Shell */
+
         printShellName();                                                           /* Printamos o nome da shell e damos um espaço para o usuário poder distinguir */
         fgets(cmdline, MAXLINE, stdin);                                             /* Pegamos o input dado pelo usuário e colocamos na string cmdline definida anteriormente, e com o tamanho máximo de MAXLINE, sendo a entrada padrão definida no C */
         if (feof(stdin)){                                                           /* Se for detectado o símbolo de EOF no input dado pelo usuário, terminamos o loop */
@@ -226,8 +262,10 @@ int builtin_command(char **argv) {                                              
             if (processos_bg[i].situation == RUNNING) printf("Running"); //new
             if (processos_bg[i].situation == STOPPED) printf("Stopped"); //new    
             if (processos_bg[i].situation == DONE) printf("Done"); //new
-            //printf("\t%d", processos_bg[i].pid);
+            printf("\t%d", processos_bg[i].pid);
             printf("\t\t\t%s", processos_bg[i].path); //new
+        }
+        for (int i=1; i<=quantidade_processos;i++){
             if (processos_bg[i].situation == DONE){                      // luan       
                 for (int j=i;j<=quantidade_processos;j++){               // luan               
                     processos_bg[j] = processos_bg[j+1];                 // luan               
@@ -253,20 +291,70 @@ int builtin_command(char **argv) {                                              
     if (!strcmp(argv[0], "fg")){ // luan
         // Falta implementar os outros casos de fg
         if (quantidade_processos > 0){
-            sigset_t set;
-            sigemptyset(&set);
-            sigaddset(&set, SIGCHLD);
-            sigprocmask(SIG_BLOCK, &set, NULL);
-            processo_fg = processos_bg[quantidade_processos];
-            processos_bg[quantidade_processos].situation = DONE;
-            processos_bg[quantidade_processos].verificado = 0;
-            kill(processo_fg.pid, SIGCONT);
-            int status;
-            waitpid(processo_fg.pid, &status, 0);
-            processo_fg = processo_shell;
-            sigprocmask(SIG_UNBLOCK, &set, NULL);
-        }
-        else{
+            if (argv[1] == NULL){
+                fg_func(quantidade_processos);
+                return 1;
+            }
+
+            int pid_process = atoi(argv[1]);
+            
+            for (int i = 1; i <= quantidade_processos; i++){
+                if(processos_bg[i].pid == pid_process){
+                    fg_func(i);
+                    return 1;
+                }
+            }
+
+            char first_char = *argv[1];
+            argv[1]++;
+            char second_char = *argv[1];
+            int id_process1 = (int) first_char - 48;
+            int id_process2 = (int) second_char - 48;
+            int id_process1_number = FALSE, id_process2_number = FALSE;
+            if (id_process1 >= 0 && id_process1 <= 9) id_process1_number = TRUE;
+            if (id_process2 >= 0 && id_process2 <= 9) id_process2_number = TRUE;
+            argv[1]--;
+            
+            if ((first_char == '+') || (first_char == '%' && second_char == '+') || (first_char == '%' && second_char == '%') || (first_char == '%' && second_char == '\0')){
+                fg_func(quantidade_processos);
+                return 1;
+            } else if ((first_char == '-') || (first_char == '%' && second_char == '-')){
+                if (quantidade_processos >= 2){
+                    fg_func(quantidade_processos-1);
+                    return 1;
+                } else {
+                    fg_func(quantidade_processos);
+                    return 1;
+                }
+            } else if ((first_char == '%' && id_process2_number == TRUE) || (id_process1_number == TRUE && (id_process2_number == TRUE || id_process2 + 48 == 0))){   
+                if (id_process2 + 48 == 0){
+                    if (id_process1 <= quantidade_processos && id_process1_number == TRUE){
+                        fg_func(id_process1);
+                        return 1;
+                    }
+                } else {
+                    if (id_process1_number == TRUE && id_process2_number == TRUE){
+                        int number = id_process1*10 + id_process2;
+                        if (number <= quantidade_processos){
+                            fg_func(number);
+                            return 1;
+                        }
+                    } else if (first_char == '%' && id_process2_number == TRUE){
+                        if (id_process2 <= quantidade_processos){
+                            fg_func(id_process2);
+                            return 1;
+                        }
+                    }
+                }
+            } else {
+                printf("bg: %s: no such job\n", argv[1]);
+                return 1;
+            }
+
+            printf("bg: %s: no such job\n", argv[1]);
+            return 1;
+
+        } else {
             puts("No processes running in background");
         }
         return 1;
@@ -275,20 +363,14 @@ int builtin_command(char **argv) {                                              
     if (!strcmp(argv[0], "bg")){ // luan
         // Falta implementar os outros casos de bg e printar a linha dizendo que foi DONE
         if (argv[1] == NULL){
-
-            kill(processos_bg[quantidade_processos].pid, SIGCONT);
-            processos_bg[quantidade_processos].situation = DONE;
-            processos_bg[quantidade_processos].verificado = 0;
+            bg_func(quantidade_processos);
             return 1;
         }
   
         int pid_process = atoi(argv[1]);
-        int id = 0;
         for (int i = 1; i <= quantidade_processos; i++){
             if(processos_bg[i].pid == pid_process){
-                kill(processos_bg[i].pid, SIGCONT);
-                processos_bg[i].situation = DONE;
-                processos_bg[i].verificado = 0;
+                bg_func(i);
                 return 1;
             }
         }
@@ -305,44 +387,32 @@ int builtin_command(char **argv) {                                              
         argv[1]--;
 
         if ((first_char == '+') || (first_char == '%' && second_char == '+') || (first_char == '%' && second_char == '%') || (first_char == '%' && second_char == '\0')){
-            kill(processos_bg[quantidade_processos].pid, SIGCONT);
-            processos_bg[quantidade_processos].situation = DONE;
-            processos_bg[quantidade_processos].verificado = 0;
+           bg_func(quantidade_processos);
             return 1;
         } else if ((first_char == '-') || (first_char == '%' && second_char == '-')){
             if (quantidade_processos >= 2){
-                kill(processos_bg[quantidade_processos-1].pid, SIGCONT);
-                processos_bg[quantidade_processos-1].situation = DONE;
-                processos_bg[quantidade_processos-1].verificado = 0;
+                bg_func(quantidade_processos-1);
                 return 1;
             } else {
-                kill(processos_bg[quantidade_processos].pid, SIGCONT);
-                processos_bg[quantidade_processos].situation = DONE;
-                processos_bg[quantidade_processos].verificado = 0;
+                bg_func(quantidade_processos);
                 return 1;
             }
         } else if ((first_char == '%' && id_process2_number == TRUE) || (id_process1_number == TRUE && (id_process2_number == TRUE || id_process2 + 48 == 0))){   
             if (id_process2 + 48 == 0){
                 if (id_process1 <= quantidade_processos && id_process1_number == TRUE){
-                    kill(processos_bg[id_process1].pid, SIGCONT);
-                    processos_bg[id_process1].situation = DONE;
-                    processos_bg[id_process1].verificado = 0;
+                    bg_func(id_process1);
                     return 1;
                 }
             } else {
                 if (id_process1_number == TRUE && id_process2_number == TRUE){
                     int number = id_process1*10 + id_process2;
                     if (number <= quantidade_processos){
-                        kill(processos_bg[number].pid, SIGCONT);
-                        processos_bg[number].situation = DONE;
-                        processos_bg[number].verificado = 0;
+                        bg_func(number);
                         return 1;
                     }
                 } else if (first_char == '%' && id_process2_number == TRUE){
                     if (id_process2 <= quantidade_processos){
-                        kill(processos_bg[id_process2].pid, SIGCONT);
-                        processos_bg[id_process2].situation = DONE;
-                        processos_bg[id_process2].verificado = 0;
+                        bg_func(id_process2);
                     return 1;
                     }
                 }
@@ -415,3 +485,4 @@ int parseline(char *buf, char **argv) {                                         
 
     return bg;                                                                      /* Retornamos o valor de bg definido */
 }
+
