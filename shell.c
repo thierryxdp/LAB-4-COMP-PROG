@@ -224,7 +224,6 @@ int builtin_command(char **argv) {                                              
     if (!strcmp(argv[0], "&"))                                                      /* No caso em que o primeiro argumento passado for o caractere '&', não há o que executar em bg */
         return 1;                                                                   /* E então retornamos o valor 1, indicando o encerramento do processo ao dar return em eval */
     if (!strcmp(argv[0], "jobs")){
-        /* Falta retirar o símbolo & do path, e excluir os processos que estiverem done */
         for (int i = 1; i <= quantidade_processos; i++){
             printf("[%d]", i);
             if (i == quantidade_processos) printf("+  ");
@@ -232,36 +231,37 @@ int builtin_command(char **argv) {                                              
             if (i < quantidade_processos - 1) printf("   ");
             pid_t pid;
             int status;
-            if (!processos_bg[i].verificado){ // luan
-                pid = waitpid(processos_bg[i].pid, &status, WUNTRACED | WNOHANG); //new
-                if (pid >= 0){ //new
-                    if (WIFEXITED(status)) { //new
-                        processos_bg[i].situation = DONE; //new
-                    } else if (WIFSTOPPED(status)){ //new
-                        processos_bg[i].situation = STOPPED; //new
-                    } //new
-                }  //new
+            if (!processos_bg[i].verificado){
+                pid = waitpid(processos_bg[i].pid, &status, WUNTRACED | WNOHANG);
+                if (pid >= 0){
+                    if (WIFEXITED(status)) {
+                        processos_bg[i].situation = DONE;
+                    } else if (WIFSTOPPED(status)){ 
+                        processos_bg[i].situation = STOPPED; 
+                    } 
+                } 
             }
-            if (processos_bg[i].situation == RUNNING) printf("Running"); //new
-            if (processos_bg[i].situation == STOPPED) printf("Stopped"); //new    
-            if (processos_bg[i].situation == DONE) printf("Done"); //new
+            if (processos_bg[i].situation == RUNNING) printf("Running");
+            if (processos_bg[i].situation == STOPPED) printf("Stopped");
+            if (processos_bg[i].situation == DONE) printf("Done");
             printf("\t%d", processos_bg[i].pid);
-            printf("\t\t\t%s", processos_bg[i].path); //new
+            printf("\t\t\t%s", processos_bg[i].path);
         }
         for (int i=1; i<=quantidade_processos;i++){
-            if (processos_bg[i].situation == DONE){                      // luan       
-                for (int j=i;j<=quantidade_processos;j++){               // luan               
-                    processos_bg[j] = processos_bg[j+1];                 // luan               
-                }                                                        // luan   
-                quantidade_processos--;                                  // luan             
-                i--;                                                     // luan   
-            }                                                            // luan                  
-            processos_bg[i].verificado = 1;                              // luan
+            if (processos_bg[i].situation == DONE){                      
+                for (int j=i;j<=quantidade_processos;j++){                              
+                    processos_bg[j] = processos_bg[j+1];                                
+                }                                                           
+                quantidade_processos--;                                               
+                i--;                                                        
+            }
+            if (processos_bg[i].situation != RUNNING)                                                                              
+                processos_bg[i].verificado = 1;                              
         }
         return 1;
     }
         
-    
+
     if (!strcmp(argv[0], "cd")) {
         int success;
         success = chdir(argv[1]);
