@@ -16,6 +16,9 @@
 #define STOPPED 16 //new
 #define DONE 17 // new
 
+#define FALSE 0
+#define TRUE 1
+
 #define KGRN  "\x1B[32m"
 #define KBLU  "\x1B[34m"
 #define KWHT  "\x1B[37m"
@@ -32,6 +35,7 @@ typedef struct{
     pid_t pid;
     char path[100];
     int situation; //new
+    int verificado; // luan
 } Processo;
 
 Processo processo_fg;
@@ -52,7 +56,22 @@ void printShellName(void);
 char shell_name[MAXLINE] = "mabshell> ";
 
 void handler(int sig){
-    
+    if (sig == SIGCHLD){ // luan
+        pid_t pid;
+        int status;
+        pid = waitpid(processo_fg.pid, &status, WNOHANG);
+        if (pid >= 0){
+            quantidade_processos++;
+            printf("\n[%d]+  Stopped\t\t\t%s", quantidade_processos, processo_fg.path);
+            processos_bg[quantidade_processos].pid = processo_fg.pid;
+            strcpy(processos_bg[quantidade_processos].path, processo_fg.path);
+            processos_bg[quantidade_processos].situation = STOPPED; //new
+            processos_bg[quantidade_processos].verificado = 1; // luan
+        }
+        else{
+            processo_fg = processo_shell;
+        }   
+    }
 }
 
 void printShellName (void){
@@ -102,10 +121,13 @@ int main(int argc, char *argv[]) {    /* Função main */
 
     processo_shell.pid = getpid();
     strcpy(processo_shell.path, argv[0]);
+    processo_fg = processo_shell; // luan
 
     signal(SIGCHLD, handler);
-    signal(SIGTSTP, handler);
-    signal(SIGINT, handler);
+    signal(SIGTSTP, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
 
     char cmdline[MAXLINE];                                                          /* String que armazenará o input do usuário na linha de comando da nossa Shell */
     while (1) {                                                                     /* Loop infinito enquanto o usuário estiver na Shell */
@@ -135,27 +157,42 @@ void eval(char *cmdline) {                                                      
 
     if (!builtin_command(argv)) {                                                   /* Verifica se é um comando existente, se não for o if é satisfeito. Pois, ou o comando não existe, ou é um objeto executável */
         if ((pid = fork()) == 0) {                                                  /* Criamos então um processo filho, e o if é satisfeito somente no processo filho */
+            
             signal(SIGTSTP, SIG_DFL);
             signal(SIGCHLD, SIG_DFL);
             signal(SIGINT, SIG_DFL);
+            signal(SIGTTIN, SIG_DFL);
+            signal(SIGTTOU, SIG_DFL);
+            setpgid(0,0);
+            if (!bg){
+                tcsetpgrp(STDIN_FILENO, getpid());
+            }
             if (execve(argv[0], argv, environ) < 0) {                               /* Nesse caso, tentamos executar o primeiro argumento passado esperando que seja um objeto executável. Caso não seja, recebemos um erro e então o if é satisfeito */
                 printf("%s: Command not found.\n", argv[0]);                        /* Não é um comando conhecido e não é um objeto executável, então não o comando não foi achado */
                 exit(0);                                                            /* Encerramos o processo */
             }
+            if(!bg){
+                tcsetpgrp(STDIN_FILENO, processo_shell.pid);
+            }
         }
-
+        setpgid(0, 0); // luan
         if (!bg) {                                                                  /* Se !bg, ou seja, se o usuário quer o processo rodando em foregroud */
+            tcsetpgrp(STDIN_FILENO, pid); // luan
             int status;                                                             /* definimos a variável de status para receber o estado do processo filho */
             processo_fg.pid = pid;
             strcpy(processo_fg.path, cmdline);
             if (waitpid(pid, &status, WUNTRACED) < 0)                               /* O processo pai espera então o processo filho terminar, já que temos o pid do filho e o inteiro de espera bloqueante passados como parâmetros de waitpid */
                 unix_error("waitfg: waitpid error");                                /* Caso waitpid seja menor que 0, houve um erro e então o sinalizamos */                                                                 
+            tcsetpgrp(STDIN_FILENO, processo_shell.pid); // luan
+            processo_fg = processo_shell; // luan
         } else {
+            
             quantidade_processos++;
             processos_bg[quantidade_processos].pid = pid;
             strcpy(processos_bg[quantidade_processos].path, cmdline);
             processos_bg[quantidade_processos].situation = RUNNING; //new
-            //printf("%d %s", pid, cmdline);                                          /* Se for em bg, printamos o pid do filho e a linha de comando passada */
+            processos_bg[quantidade_processos].verificado = 0; // luan
+            printf("[%d] %d\n", quantidade_processos, pid);  //luan                  /* Se for em bg, printamos o pid do filho e a linha de comando passada */
         }                 
     }
     return;                                                                         /* retorno 0 de eval para o término do processo visto que eval retorna void */
@@ -176,38 +213,30 @@ int builtin_command(char **argv) {                                              
             if (i < quantidade_processos - 1) printf("   ");
             pid_t pid;
             int status;
-            pid = waitpid(processos_bg[i].pid, &status, WUNTRACED | WNOHANG); //new
-        
-            if (pid >= 0){ //new
-                if (WIFEXITED(status)) { //new
-                    processos_bg[i].situation = DONE; //new
-                } else if (WIFSTOPPED(status)){ //new
-                    processos_bg[i].situation = STOPPED; //new
-                } //new
-            }  //new
+            if (!processos_bg[i].verificado){ // luan
+                pid = waitpid(processos_bg[i].pid, &status, WUNTRACED | WNOHANG); //new
+                if (pid >= 0){ //new
+                    if (WIFEXITED(status)) { //new
+                        processos_bg[i].situation = DONE; //new
+                    } else if (WIFSTOPPED(status)){ //new
+                        processos_bg[i].situation = STOPPED; //new
+                    } //new
+                }  //new
+            }
             if (processos_bg[i].situation == RUNNING) printf("Running"); //new
             if (processos_bg[i].situation == STOPPED) printf("Stopped"); //new    
             if (processos_bg[i].situation == DONE) printf("Done"); //new
+            //printf("\t%d", processos_bg[i].pid);
             printf("\t\t\t%s", processos_bg[i].path); //new
-            
-         
+            if (processos_bg[i].situation == DONE){                      // luan       
+                for (int j=i;j<=quantidade_processos;j++){               // luan               
+                    processos_bg[j] = processos_bg[j+1];                 // luan               
+                }                                                        // luan   
+                quantidade_processos--;                                  // luan             
+                i--;                                                     // luan   
+            }                                                            // luan       
+            processos_bg[i].verificado = 1;                              // luan           
         }
-        /* -> Tentativa falha de implementar reap dos processos com done (zombies). Mais fácil fazer uma lista encadeada, e muito mais prático, porém fui de berço, pode deixar que eu implemento amanhã, vai resolvendo as outras coisas
-        for (int i = quantidade_processos; i >= 1; i--){
-            if (processos_bg[i].situation == DONE){
-                if (i == quantidade_processos){
-                    Processo temp;
-                    quantidade_processos--;
-                } else {
-                    printf("alo\n");
-                    for (int j = i; j <= quantidade_processos - 1; j++){
-                        processos_bg[j] = processos_bg[j+1];
-                    }
-                    quantidade_processos--;
-                }
-            }   
-        }
-        */
         return 1;
     }
         
@@ -221,11 +250,114 @@ int builtin_command(char **argv) {                                              
         return 1;
     }
 
-    if (!strcmp(argv[0], "fg")){
-        
+    if (!strcmp(argv[0], "fg")){ // luan
+        // Falta implementar os outros casos de fg
+        if (quantidade_processos > 0){
+            sigset_t set;
+            sigemptyset(&set);
+            sigaddset(&set, SIGCHLD);
+            sigprocmask(SIG_BLOCK, &set, NULL);
+            processo_fg = processos_bg[quantidade_processos];
+            processos_bg[quantidade_processos].situation = DONE;
+            processos_bg[quantidade_processos].verificado = 0;
+            kill(processo_fg.pid, SIGCONT);
+            int status;
+            waitpid(processo_fg.pid, &status, 0);
+            processo_fg = processo_shell;
+            sigprocmask(SIG_UNBLOCK, &set, NULL);
+        }
+        else{
+            puts("No processes running in background");
+        }
+        return 1;
     }
+
+    if (!strcmp(argv[0], "bg")){ // luan
+        // Falta implementar os outros casos de bg e printar a linha dizendo que foi DONE
+        if (argv[1] == NULL){
+
+            kill(processos_bg[quantidade_processos].pid, SIGCONT);
+            processos_bg[quantidade_processos].situation = DONE;
+            processos_bg[quantidade_processos].verificado = 0;
+            return 1;
+        }
+  
+        int pid_process = atoi(argv[1]);
+        int id = 0;
+        for (int i = 1; i <= quantidade_processos; i++){
+            if(processos_bg[i].pid == pid_process){
+                kill(processos_bg[i].pid, SIGCONT);
+                processos_bg[i].situation = DONE;
+                processos_bg[i].verificado = 0;
+                return 1;
+            }
+        }
+
+
+        char first_char = *argv[1];
+        argv[1]++;
+        char second_char = *argv[1];
+        int id_process1 = (int) first_char - 48;
+        int id_process2 = (int) second_char - 48;
+        int id_process1_number = FALSE, id_process2_number = FALSE;
+        if (id_process1 >= 0 && id_process1 <= 9) id_process1_number = TRUE;
+        if (id_process2 >= 0 && id_process2 <= 9) id_process2_number = TRUE;
+        argv[1]--;
+
+        if ((first_char == '+') || (first_char == '%' && second_char == '+') || (first_char == '%' && second_char == '%') || (first_char == '%' && second_char == '\0')){
+            kill(processos_bg[quantidade_processos].pid, SIGCONT);
+            processos_bg[quantidade_processos].situation = DONE;
+            processos_bg[quantidade_processos].verificado = 0;
+            return 1;
+        } else if ((first_char == '-') || (first_char == '%' && second_char == '-')){
+            if (quantidade_processos >= 2){
+                kill(processos_bg[quantidade_processos-1].pid, SIGCONT);
+                processos_bg[quantidade_processos-1].situation = DONE;
+                processos_bg[quantidade_processos-1].verificado = 0;
+                return 1;
+            } else {
+                kill(processos_bg[quantidade_processos].pid, SIGCONT);
+                processos_bg[quantidade_processos].situation = DONE;
+                processos_bg[quantidade_processos].verificado = 0;
+                return 1;
+            }
+        } else if ((first_char == '%' && id_process2_number == TRUE) || (id_process1_number == TRUE && (id_process2_number == TRUE || id_process2 + 48 == 0))){   
+            if (id_process2 + 48 == 0){
+                if (id_process1 <= quantidade_processos && id_process1_number == TRUE){
+                    kill(processos_bg[id_process1].pid, SIGCONT);
+                    processos_bg[id_process1].situation = DONE;
+                    processos_bg[id_process1].verificado = 0;
+                    return 1;
+                }
+            } else {
+                if (id_process1_number == TRUE && id_process2_number == TRUE){
+                    int number = id_process1*10 + id_process2;
+                    if (number <= quantidade_processos){
+                        kill(processos_bg[number].pid, SIGCONT);
+                        processos_bg[number].situation = DONE;
+                        processos_bg[number].verificado = 0;
+                        return 1;
+                    }
+                } else if (first_char == '%' && id_process2_number == TRUE){
+                    if (id_process2 <= quantidade_processos){
+                        kill(processos_bg[id_process2].pid, SIGCONT);
+                        processos_bg[id_process2].situation = DONE;
+                        processos_bg[id_process2].verificado = 0;
+                    return 1;
+                    }
+                }
+            }
+        } else {
+            printf("bg: %s: no such job\n", argv[1]);
+            return 1;
+        }
+
+        printf("bg: %s: no such job\n", argv[1]);
+        return 1;
+    }
+
     if (!strcmp(argv[0], "ls")){
-        // Falta ordenar os nomes ???
+        // Falta ordenar os nomes ??? e se algum arquivo contiver . no nome mas não for executável, vai ficar colorido
         DIR *d;
         struct dirent *dir;
         d = opendir(".");
